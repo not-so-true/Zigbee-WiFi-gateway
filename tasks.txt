@@ -1,3 +1,5 @@
-- [wifi.c/netif_handler] readd Zigbee devices IPv6 list 
-- [tools.c/blink_led_task] reset program states after timeout
-- [main.c/app_main] wifi reconnection system 
+- [zigbee.c/zigbee_handler] understand parameters and write switch
+- [zigbee.c/esp_zb_app_signal_handler] understand parameters and write switch
+- [wifi.c/netif_handler] wifi reconnection system
+- [wifi.c/netif_handler] add IPv6 list on reconnection
+- [main.c/app_main] wifi and zigbee connection moment
