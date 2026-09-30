@@ -1,12 +1,15 @@
 #ifndef ZIGBEE_H
 #define ZIGBEE_H
 
-#include "esp_zigbee_core.h"
+#include "esp_zigbee.h"
+#include "ezbee/zha.h"
+
 
 #define ZGB_CHANNELS_TO_SCAN ((1UL << 15) | (1UL << 20) | (1UL << 25))
 
-void zgb_stack_task(void* pvParameters);
-esp_err_t zigbee_handler(esp_zb_core_action_callback_id_t callback_id, const void *message);
-void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct);
+void zigbee_stack_task(void* pvParameters);
+void zigbee_cluster_handler(ezb_zcl_core_action_callback_id_t callback_id, void *message);
+bool zigbee_handler(const ezb_app_signal_t* signal);
+esp_err_t zigbee_init_descriptors(void);
 
 #endif // ZIGBEE_H

@@ -10,8 +10,8 @@ void led_init(void) {
     led_strip_config_t strip_config = {
         .strip_gpio_num = LED_GPIO_PIN,
         .max_leds = 1,
-        .led_pixel_format = LED_PIXEL_FORMAT_GRB,
-        .led_model = LED_MODEL_WS2812
+        .led_model = LED_MODEL_WS2812,
+        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB
     };
     
     led_strip_rmt_config_t rmt_config = {
@@ -48,52 +48,58 @@ void wifi_init(void) {
 }
 
 void zigbee_init(void) {
-    esp_zb_platform_config_t zgb_modem_cfg = {
-        .radio_config = {.radio_mode = ZB_RADIO_MODE_NATIVE}, // external or internal radio
-        .host_config = {.host_connection_mode = ZB_HOST_CONNECTION_MODE_NONE} // external or internal commands
-    };
-    esp_zb_cfg_t zgb_network_cfg = {
-        .esp_zb_role = ESP_ZB_DEVICE_TYPE_COORDINATOR,
+    ESP_ERROR_CHECK(nvs_flash_init_partition("zb_storage"));
+
+    esp_zigbee_device_config_t zigbee_role = {
+        .device_type = EZB_NWK_DEVICE_TYPE_COORDINATOR,
         .install_code_policy = false, // security setting, for later considaration
-        .nwk_cfg.zczr_cfg = {.max_children = 32} // directly connected devices (other through routers)
+        .zczr_config = {.max_children = 32} // directly connected devices (other through routers)
+    };
+    esp_zigbee_platform_config_t zigbee_modem = {
+        .storage_partition_name = "zb_storage",
+        .radio_config = {.radio_mode = ESP_ZIGBEE_RADIO_MODE_NATIVE}, // external or internal radio
+    };
+    esp_zigbee_config_t zigbee_cfg = {
+        .device_config = zigbee_role,
+        .platform_config = zigbee_modem
     };
 
-    esp_zb_platform_config(&zgb_modem_cfg);
-    esp_zb_init(&zgb_network_cfg);
+    ESP_ERROR_CHECK(esp_zigbee_init(&zigbee_cfg));
+    ESP_ERROR_CHECK(zigbee_init_descriptors());
 
-    esp_zb_endpoint_config_t zgb_endpoint_cfg = {
-        .endpoint = 1,
-        .app_profile_id = ESP_ZB_AF_HA_PROFILE_ID,
-        .app_device_id = ESP_ZB_HA_HOME_GATEWAY_DEVICE_ID,
-        .app_device_version = 0,
-    };
-    esp_zb_ep_list_t *ep_list = esp_zb_ep_list_create();
-    esp_zb_cluster_list_t *cluster_list = esp_zb_zcl_cluster_list_create();
-
-    esp_zb_cluster_list_add_basic_cluster(
-        cluster_list, 
-        esp_zb_basic_cluster_create(NULL), 
-        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE
-    );
-    esp_zb_cluster_list_add_identify_cluster(
-        cluster_list, 
-        esp_zb_identify_cluster_create(NULL), 
-        ESP_ZB_ZCL_CLUSTER_SERVER_ROLE
-    );
+    ezb_app_signal_add_handler(zigbee_handler);
+    ezb_zcl_core_action_handler_register(zigbee_cluster_handler);
     
-    esp_zb_ep_list_add_ep(ep_list, cluster_list, zgb_endpoint_cfg);
-    esp_zb_device_register(ep_list);
+    // ezb_mem_config_t zigbee_memory_cfg = {
+    //         /** The capacity of the buffer pool */
+    //     .buffer_pool_size = ,
+    //     /** The capacity of the address table */
+    //     .address_table_size = ,
+    //     /** The capacity of the neighbor table */
+    //     .neighbor_table_size = ,
+    //     /** The capacity of the route table */
+    //     .route_table_size = ,
+    //     /** The capacity of the route discovery table */
+    //     .route_discovery_table_size = ,
+    //     /** The capacity of the route record table */
+    //     .route_record_table_size = ,
+    //     /** The capacity of the APS device key pair set */
+    //     .aps_key_pair_set_size = ,
+    //     /** The capacity of source entries in the APS binding table */
+    //     .aps_bind_table_src_size = ,
+    //     /** The capacity of destination entries in the APS binding table */
+    //     .aps_bind_table_dst_size = 
+    // };
+    // ezb_config_memory(&zigbee_memory_cfg);
 
-    esp_zb_set_primary_network_channel_set(ZGB_CHANNELS_TO_SCAN);
-
-    esp_zb_core_action_handler_register(zigbee_handler);
-
-    ESP_ERROR_CHECK(esp_zb_start(false));
+    ezb_bdb_set_primary_channel_set(ZGB_CHANNELS_TO_SCAN);
 
     ESP_LOGI(TAG_ZIGBEE, "Initialized successfully");
 }
 
 void app_main(void) {   
+    vTaskDelay(pdMS_TO_TICKS(4000));
+
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
@@ -118,7 +124,9 @@ void app_main(void) {
     esp_wifi_connect();
 
     // zigbee startup
-    xTaskCreate(zgb_stack_task, "zgb_stack", 8192, NULL, 20, NULL);
+    post_program_state(PROCESSING);
+    esp_zigbee_start(false);
+    xTaskCreate(zigbee_stack_task, "zigbee_stack", 8192, NULL, 20, NULL);
 
     esp_netif_ip_info_t ipv4;
     esp_ip6_addr_t ipv6[CONFIG_LWIP_IPV6_NUM_ADDRESSES];
