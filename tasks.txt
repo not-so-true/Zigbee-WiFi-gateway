@@ -1,8 +1,9 @@
-- [zigbee.c] migration from SDK v1.x to v2.x
-- [wifi.c] adding ntp server, time synchronisation and change of time cluster 
-           attribute to EZB_ZCL_TIME_TIME_STATUS_SYNCHRONIZED
 - [zigbee.c/zigbee_handler] understand parameters and write switch
 - [zigbee.c/esp_zb_app_signal_handler] understand parameters and write switch
 - [wifi.c/netif_handler] wifi reconnection system
+- [wifi.c] adding ntp server, time synchronisation and change of time cluster 
+           attribute to EZB_ZCL_TIME_TIME_STATUS_SYNCHRONIZED
 - [wifi.c/netif_handler] add IPv6 list on reconnection
-- [main.c/app_main] wifi and zigbee connection moment
+- [main.c/app_main] choosing wifi and zigbee connection mechanism
+- [wifi.c/netif_handler] choosing where to init Zigbee stack
+- [zigbee.c/zigbee_handler] post_program_state() w steering!

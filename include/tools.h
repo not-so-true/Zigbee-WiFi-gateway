@@ -7,6 +7,7 @@
 
 extern led_strip_handle_t led;
 
+void led_init(void);
 void post_program_state(program_state_t state);
 void program_state_callback(TimerHandle_t xTimer);
 void led_blink_task(void* pvParameters);

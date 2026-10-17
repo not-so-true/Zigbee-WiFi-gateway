@@ -1,8 +1,66 @@
 #include "config.h"
 #include "zigbee.h"
+#include "tools.h"
+
+void zigbee_init(void) {
+    ESP_ERROR_CHECK(nvs_flash_init_partition("zb_storage"));
+
+    esp_zigbee_device_config_t zigbee_role = {
+        .device_type = EZB_NWK_DEVICE_TYPE_COORDINATOR,
+        .install_code_policy = false, // security setting, for later considaration
+        .zczr_config = {.max_children = 32} // directly connected devices (other through routers)
+    };
+    esp_zigbee_platform_config_t zigbee_modem = {
+        .storage_partition_name = "zb_storage",
+        .radio_config = {.radio_mode = ESP_ZIGBEE_RADIO_MODE_NATIVE}, // external or internal radio
+    };
+    esp_zigbee_config_t zigbee_cfg = {
+        .device_config = zigbee_role,
+        .platform_config = zigbee_modem
+    };
+
+    ESP_ERROR_CHECK(esp_zigbee_init(&zigbee_cfg));
+    ESP_ERROR_CHECK(zigbee_init_descriptors());
+
+    ezb_app_signal_add_handler(zigbee_handler);
+    ezb_zcl_core_action_handler_register(zigbee_cluster_handler);
+    
+    // ezb_mem_config_t zigbee_memory_cfg = {
+    //         /** The capacity of the buffer pool */
+    //     .buffer_pool_size = ,
+    //     /** The capacity of the address table */
+    //     .address_table_size = ,
+    //     /** The capacity of the neighbor table */
+    //     .neighbor_table_size = ,
+    //     /** The capacity of the route table */
+    //     .route_table_size = ,
+    //     /** The capacity of the route discovery table */
+    //     .route_discovery_table_size = ,
+    //     /** The capacity of the route record table */
+    //     .route_record_table_size = ,
+    //     /** The capacity of the APS device key pair set */
+    //     .aps_key_pair_set_size = ,
+    //     /** The capacity of source entries in the APS binding table */
+    //     .aps_bind_table_src_size = ,
+    //     /** The capacity of destination entries in the APS binding table */
+    //     .aps_bind_table_dst_size = 
+    // };
+    // ezb_config_memory(&zigbee_memory_cfg);
+    
+    //ezb_aps_secur_enable_distributed_security(false);
+    ezb_bdb_set_primary_channel_set(ZIGBEE_PRIMARY_CHANNELS);
+
+    ESP_LOGI(TAG_ZIGBEE, "Initialized successfully");
+}
 
 void zigbee_stack_task(void* pvParameters) {
+    zigbee_init();
+
+    post_program_state(PROCESSING);
+    esp_zigbee_start(false);
+
     esp_zigbee_launch_mainloop();
+
     esp_zigbee_deinit();
     vTaskDelete(NULL);
 }
@@ -12,8 +70,122 @@ void zigbee_cluster_handler(ezb_zcl_core_action_callback_id_t callback_id, void 
 }
 
 bool zigbee_handler(const ezb_app_signal_t* signal) {
-    //ezb_app_signal_get_params();
-    //ezb_app_signal_get_type();
+    ezb_app_signal_type_t signal_type = ezb_app_signal_get_type(signal);
+    ezb_err_t err = EZB_ERR_NONE;
+
+    switch (signal_type) {
+    case EZB_ZDO_SIGNAL_SKIP_STARTUP: {
+        err = ezb_bdb_start_top_level_commissioning(EZB_BDB_MODE_INITIALIZATION);
+        break;
+    }
+    case EZB_BDB_SIGNAL_DEVICE_FIRST_START:
+    case EZB_BDB_SIGNAL_DEVICE_REBOOT: {
+        ezb_bdb_signal_simple_params_t params = *((ezb_bdb_signal_simple_params_t *)ezb_app_signal_get_params(signal));
+        if (params.status == EZB_BDB_STATUS_SUCCESS) {
+            if (ezb_bdb_is_factory_new()) {
+                ESP_LOGI(TAG_ZIGBEE, "Factory new device, creating network...");
+                err = ezb_bdb_start_top_level_commissioning(EZB_BDB_MODE_NETWORK_FORMATION);
+            } else {
+                ESP_LOGI(TAG_ZIGBEE, "Device reboot, recreating network ...");
+                err = ezb_bdb_start_top_level_commissioning(EZB_BDB_MODE_NETWORK_STEERING);
+            }
+        } else {
+            ESP_LOGE(TAG_ZIGBEE, "Network initialisation failure (status: 0x%02x), retrying...", params.status);
+            post_program_state(ERROR);
+
+            err = ezb_bdb_start_top_level_commissioning(EZB_BDB_MODE_INITIALIZATION);
+        }
+        break;
+    }
+    case EZB_BDB_SIGNAL_FORMATION: { // formacja sieci przy ustawieniach fabrycznych (pierwszy start)
+        ezb_bdb_signal_simple_params_t params = *((ezb_bdb_signal_simple_params_t *)ezb_app_signal_get_params(signal));
+        if (params.status == EZB_BDB_STATUS_SUCCESS) {
+            ESP_LOGI(TAG_ZIGBEE, "Network formation successful");
+            post_program_state(DONE);
+
+            xEventGroupSetBits(event_group, ZIGBEE_BIT);
+        } else {
+            ESP_LOGE(TAG_ZIGBEE, "Network formation failure (status: 0x%02x), retrying...", params.status);
+            post_program_state(ERROR);
+
+            err = ezb_bdb_start_top_level_commissioning(EZB_BDB_MODE_NETWORK_FORMATION);
+        }
+        break;
+    }
+    case EZB_BDB_SIGNAL_STEERING: {
+        ezb_bdb_signal_simple_params_t params = *((ezb_bdb_signal_simple_params_t *)ezb_app_signal_get_params(signal));
+
+        if (params.status == EZB_BDB_STATUS_SUCCESS) {
+            ESP_LOGI(TAG_ZIGBEE, "Network steering successful, network opened for 180s");
+            post_program_state(PROCESSING);
+        } else {
+            ESP_LOGE(TAG_ZIGBEE, "Network steering failure (status: 0x%02x), retrying...", params.status);
+            post_program_state(ERROR);
+
+            err = ezb_bdb_start_top_level_commissioning(EZB_BDB_MODE_NETWORK_STEERING);
+        }
+        break;
+    }
+
+
+
+    case EZB_NWK_SIGNAL_PANID_CONFLICT_DETECTED: {
+        break;
+    }
+    case EZB_NWK_SIGNAL_NETWORK_STATUS: { // statusy błędów zwracane w sieci
+        ezb_nwk_signal_network_status_params_t params = *((ezb_nwk_signal_network_status_params_t *)ezb_app_signal_get_params(signal));
+        break;
+    }
+    case EZB_NWK_SIGNAL_PERMIT_JOIN_STATUS: { // informacja o zamknieciu lub otwarciu sieci
+        ezb_nwk_signal_permit_join_status_params_t params = *((ezb_nwk_signal_permit_join_status_params_t *)ezb_app_signal_get_params(signal));
+        break;
+    }
+
+
+
+    case EZB_ZDO_SIGNAL_DEVICE_ANNCE: { // rejestracja urządzenia w sieci
+        ezb_zdo_signal_device_annce_params_t params = *((ezb_zdo_signal_device_annce_params_t *)ezb_app_signal_get_params(signal));
+        ESP_LOGI(TAG_ZIGBEE, "Device 0x%016llx joined the network", params.device_addr);
+
+        // tu docelowo: rejestracja urządzenia
+
+        break;
+    }
+    case EZB_ZDO_SIGNAL_DEVICE_UNAVAILABLE: { // urządzenie nieosiągalne
+        ezb_zdo_signal_device_unavailable_params_t params = *((ezb_zdo_signal_device_unavailable_params_t *)ezb_app_signal_get_params(signal));
+        ESP_LOGI(TAG_ZIGBEE, "Device 0x%016llx unreachable", params.device_addr);
+        break;
+    }
+    case EZB_ZDO_SIGNAL_LEAVE_INDICATION: { // powiadomienie o wyjściu urządzenia z sieci
+        ezb_zdo_signal_leave_indication_params_t params = *((ezb_zdo_signal_leave_indication_params_t *)ezb_app_signal_get_params(signal));
+        if (params.leave_type == EZB_ZDO_LEAVE_TYPE_REJOIN)
+            ESP_LOGI(TAG_ZIGBEE, "Device 0x%016llx left the network, will try to rejoin", params.device_addr);
+        else
+            ESP_LOGI(TAG_ZIGBEE, "Device 0x%016llx left the network", params.device_addr);
+        break;
+    }
+    case EZB_ZDO_SIGNAL_LEAVE: { // wyjście bramki z sieci
+        ezb_zdo_signal_leave_params_t params = *((ezb_zdo_signal_leave_params_t *)ezb_app_signal_get_params(signal));
+        if (params.leave_type == EZB_ZDO_LEAVE_TYPE_REJOIN)
+            ESP_LOGI(TAG_ZIGBEE, "Left the network, will try to rejoin");
+        else
+            ESP_LOGI(TAG_ZIGBEE, "Left the network");
+        break;
+    }
+    case EZB_ZDO_SIGNAL_ERROR:
+        ESP_LOGE(TAG_ZIGBEE, "Error in signaling detected");
+        break;
+    default:
+        ESP_LOGW(TAG_ZIGBEE, "Unhandled signal received: %s", ezb_app_signal_to_string(signal_type));
+        return false;
+        break;
+    }
+
+    if (err != EZB_ERR_NONE) {
+        ESP_LOGE(TAG_ZIGBEE, "Error at %s, code: 0x%02x", ezb_app_signal_to_string(signal_type), err);
+        post_program_state(ERROR);
+    }
+
     return true;
 }
 
@@ -28,6 +200,9 @@ esp_err_t zigbee_init_descriptors(void) {
     ezb_zcl_cluster_desc_t zcl_identify = ezb_zcl_identify_create_cluster_desc(NULL, EZB_ZCL_CLUSTER_SERVER);
     ezb_zcl_cluster_desc_t zcl_time = ezb_zcl_time_create_cluster_desc(NULL, EZB_ZCL_CLUSTER_SERVER);
     
+    ezb_zcl_basic_server_generic_device_type_t generic_device_type = EZB_ZCL_BASIC_GENERIC_DEVICE_TYPE_GATEWAY_OR_BRIDGE;
+    ezb_zcl_basic_cluster_desc_add_attr(zcl_basic, EZB_ZCL_ATTR_BASIC_GENERIC_DEVICE_TYPE_ID, &generic_device_type);
+
     // klastry klienckie - brak, ze względu na gateway_endpoint, który pomija weryfikację klastrów klienckich w wymianie danych
     // ezb_zcl_cluster_desc_t zcl_basic_c = ezb_zcl_basic_create_cluster_desc(NULL, EZB_ZCL_CLUSTER_CLIENT);
     // ezb_zcl_cluster_desc_t zcl_identify_c = ezb_zcl_identify_create_cluster_desc(NULL, EZB_ZCL_CLUSTER_CLIENT);
