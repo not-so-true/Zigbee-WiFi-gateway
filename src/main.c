@@ -8,7 +8,7 @@ QueueHandle_t program_state_queue;
 TimerHandle_t program_state_timer;
 
 void app_main(void) {
-    ESP_ERROR_CHECK(nvs_flash_erase_partition("zb_storage")); // tylko dla testów!
+    //ESP_ERROR_CHECK(nvs_flash_erase_partition("zb_storage")); // tylko dla testów!
 
     vTaskDelay(pdMS_TO_TICKS(5000));
 
@@ -28,11 +28,18 @@ void app_main(void) {
     xEventGroupWaitBits(event_group, ZIGBEE_BIT, pdTRUE, pdTRUE, portMAX_DELAY);
     wifi_init();
 
-    esp_netif_ip_info_t ipv4;
-    esp_ip6_addr_t ipv6[CONFIG_LWIP_IPV6_NUM_ADDRESSES];
+    xEventGroupWaitBits(event_group, WIFI_BIT, pdTRUE, pdTRUE, portMAX_DELAY);
+    wifi_print_network_info();
+
+    while (zigbee_start_pairing() != ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(30000));
-        ESP_LOGI(TAG_SYSTEM, "Alive...");
+
+        //ESP_LOGI(TAG_SYSTEM, "Alive...");
+        zigbee_print_network_info();
+        wifi_print_network_info();
     }
 }

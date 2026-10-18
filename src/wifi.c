@@ -61,12 +61,7 @@ void wifi_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void
 void ip_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
     switch (event_id) {
     case IP_EVENT_STA_GOT_IP: {
-        esp_netif_ip_info_t ipv4;
-        esp_netif_get_ip_info(wifi_netif, &ipv4);
-
-        ESP_LOGI(TAG_WIFI, "Adres IP: " IPSTR, IP2STR(&ipv4.ip));
-        ESP_LOGI(TAG_WIFI, "Maska:    " IPSTR, IP2STR(&ipv4.netmask));
-        ESP_LOGI(TAG_WIFI, "Brama:    " IPSTR, IP2STR(&ipv4.gw));
+        xEventGroupSetBits(event_group, WIFI_BIT);
         break;
     }
     case IP_EVENT_TX_RX: {
@@ -77,4 +72,31 @@ void ip_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* 
         ESP_LOGW(TAG_WIFI, "Unknown event: %d", event_id);
         break;
     }
+}
+
+void wifi_print_network_info(void) {
+    wifi_ap_record_t ap_info;
+    esp_netif_ip_info_t ipv4 = {0};
+    esp_ip6_addr_t ipv6[CONFIG_LWIP_IPV6_NUM_ADDRESSES] = {0};
+    uint8_t mac[6] = {0};
+
+    esp_wifi_get_mac(WIFI_IF_STA, mac);
+    esp_netif_get_ip_info(wifi_netif, &ipv4);
+    int ipv6_count = esp_netif_get_all_ip6(wifi_netif, ipv6);
+
+    ESP_LOGI(TAG_WIFI, "====== WIFI NETWORK INFO ======");
+    if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+        ESP_LOGI(TAG_WIFI, "Channel:     %d", ap_info.primary);
+        ESP_LOGI(TAG_WIFI, "SSID:        %s", ap_info.ssid);
+        ESP_LOGI(TAG_WIFI, "RSSI:        %d dBm", ap_info.rssi);
+        ESP_LOGI(TAG_WIFI, "IPv4 Addr:   " IPSTR, IP2STR(&ipv4.ip));
+        ESP_LOGI(TAG_WIFI, "Netmask:     " IPSTR, IP2STR(&ipv4.netmask));
+        ESP_LOGI(TAG_WIFI, "Gateway:     " IPSTR, IP2STR(&ipv4.gw));
+        for (int i = 1; i < ipv6_count+1; i++)
+            ESP_LOGI(TAG_WIFI, "IPv6 Addr %d: " IPV6STR, i, IPV62STR(ipv6[i-1]));
+    } else
+        ESP_LOGW(TAG_WIFI, "Status:      Not connected");
+
+    ESP_LOGI(TAG_WIFI, "MAC:         %02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    ESP_LOGI(TAG_WIFI, "===============================");
 }
