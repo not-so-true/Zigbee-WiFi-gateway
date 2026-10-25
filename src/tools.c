@@ -3,6 +3,8 @@
 
 led_strip_handle_t led;
 
+
+
 static void led_change_colour(led_strip_handle_t led, uint8_t r, uint8_t g, uint8_t b, uint32_t delay) {
     if (delay == 0) {
         led_strip_set_pixel(led, 0, r, g, b);
@@ -18,6 +20,8 @@ static void led_change_colour(led_strip_handle_t led, uint8_t r, uint8_t g, uint
         vTaskDelay(pdMS_TO_TICKS(delay));
     }
 }
+
+
 
 void led_init(void) {
     led_strip_config_t strip_config = {
@@ -46,19 +50,6 @@ void led_init(void) {
     ESP_LOGI(TAG_LED, "Initialized successfully");
 }
 
-void post_program_state(program_state_t state) {
-    xQueueSend(program_state_queue, &state, 0);
-    if (state == DONE)
-        xTimerReset(program_state_timer, 0);
-    else
-        xTimerStop(program_state_timer, 0);
-}
-
-void program_state_callback(TimerHandle_t xTimer) {
-    program_state_t state = IDLE;
-    xQueueSend(program_state_queue, &state, 0);
-}
-
 void led_blink_task(void* pvParameters) {
     led_strip_handle_t led = (led_strip_handle_t) pvParameters;
     program_state_t program_state = IDLE;
@@ -85,4 +76,45 @@ void led_blink_task(void* pvParameters) {
         check = xQueueReceive(program_state_queue, &program_state, timeout);
         if (check == pdTRUE) timeout = 0;
     }
+}
+
+void program_state_post(program_state_t state) {
+    xQueueSend(program_state_queue, &state, 0);
+    if (state == DONE)
+        xTimerReset(program_state_timer, 0);
+    else
+        xTimerStop(program_state_timer, 0);
+}
+
+void program_state_callback(TimerHandle_t xTimer) {
+    program_state_t state = IDLE;
+    xQueueSend(program_state_queue, &state, 0);
+}
+
+esp_err_t tools_save_to_nvs(const char* namespace, const char* key, const void* data, size_t* size) {
+    nvs_handle_t handle;
+    esp_err_t err = ESP_OK;
+
+    err = nvs_open(namespace, NVS_READWRITE, &handle);
+    if (err != ESP_OK) return err;
+
+    err = nvs_set_blob(handle, key, data, *size);
+
+    if (err == ESP_OK) err = nvs_commit(handle);
+
+    nvs_close(handle);
+    return err;
+}
+
+esp_err_t tools_read_from_nvs(const char* namespace, const char* key, void* data, size_t* size) {
+    nvs_handle_t handle;
+    esp_err_t err = ESP_OK;
+
+    err = nvs_open(namespace, NVS_READWRITE, &handle);
+    if (err != ESP_OK) return err;
+
+    err = nvs_get_blob(handle, key, data, size);
+
+    nvs_close(handle);
+    return err;
 }

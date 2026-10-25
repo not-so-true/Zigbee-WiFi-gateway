@@ -1,3 +1,6 @@
+- [gateway.c] verify map init
+
+- [gateway.c] IPv6 network choice (dynamic or not)
 - [zigbee.c/esp_zb_app_signal_handler] understand parameters and write switch
 - [wifi.c/netif_handler] wifi reconnection system
 - [wifi.c] adding ntp server, time synchronisation and change of time cluster 
@@ -5,4 +8,5 @@
 - [wifi.c/netif_handler] add IPv6 list on reconnection
 - [main.c/app_main] choosing wifi and zigbee connection mechanism
 - [wifi.c/netif_handler] choosing where to init Zigbee stack and WiFi
+- [zigbee.c/zigbee_handler] EZB_NWK_SIGNAL_NETWORK_STATUS implementation
 - [zigbee.c/zigbee_handler] EZB_NWK_SIGNAL_PANID_CONFLICT_DETECTED implementation

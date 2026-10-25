@@ -1,9 +1,11 @@
 #include "config.h"
 #include "zigbee.h"
+#include "wifi.h"
+#include "gateway.h"
 #include "tools.h"
 
 void zigbee_init(void) {
-    ESP_ERROR_CHECK(nvs_flash_init_partition("zb_storage"));
+    ESP_ERROR_CHECK(nvs_flash_init_partition(ZIGBEE_PARTITION));
 
     esp_zigbee_device_config_t zigbee_role = {
         .device_type = EZB_NWK_DEVICE_TYPE_COORDINATOR,
@@ -11,7 +13,7 @@ void zigbee_init(void) {
         .zczr_config = {.max_children = 32} // directly connected devices (other through routers)
     };
     esp_zigbee_platform_config_t zigbee_modem = {
-        .storage_partition_name = "zb_storage",
+        .storage_partition_name = ZIGBEE_PARTITION,
         .radio_config = {.radio_mode = ESP_ZIGBEE_RADIO_MODE_NATIVE}, // external or internal radio
     };
     esp_zigbee_config_t zigbee_cfg = {
@@ -56,7 +58,7 @@ void zigbee_init(void) {
 void zigbee_stack_task(void* pvParameters) {
     zigbee_init();
 
-    post_program_state(PROCESSING);
+    program_state_post(PROCESSING);
     esp_zigbee_start(false);
 
     esp_zigbee_launch_mainloop();
@@ -125,11 +127,15 @@ bool zigbee_handler(const ezb_app_signal_t* signal) {
         ezb_bdb_signal_simple_params_t params = *((ezb_bdb_signal_simple_params_t *)ezb_app_signal_get_params(signal));
         if (params.status == EZB_BDB_STATUS_SUCCESS) {
             if (ezb_bdb_is_factory_new()) {
+                gateway_map_init(); // utworzenie mapy urządzeń
+
                 ESP_LOGI(TAG_ZIGBEE, "Factory new device, creating network...");
                 err = ezb_bdb_start_top_level_commissioning(EZB_BDB_MODE_NETWORK_FORMATION);
             } else {
+                gateway_restore_map();
+
                 ESP_LOGI(TAG_ZIGBEE, "Device reboot, network recreated");
-                post_program_state(DONE);
+                program_state_post(DONE);
 
                 zigbee_print_network_info();
 
@@ -137,7 +143,7 @@ bool zigbee_handler(const ezb_app_signal_t* signal) {
             }
         } else {
             ESP_LOGE(TAG_ZIGBEE, "Network initialisation failure (status: 0x%02x), retrying...", params.status);
-            post_program_state(ERROR);
+            program_state_post(ERROR);
 
             err = ezb_bdb_start_top_level_commissioning(EZB_BDB_MODE_INITIALIZATION);
         }
@@ -147,14 +153,14 @@ bool zigbee_handler(const ezb_app_signal_t* signal) {
         ezb_bdb_signal_simple_params_t params = *((ezb_bdb_signal_simple_params_t *)ezb_app_signal_get_params(signal));
         if (params.status == EZB_BDB_STATUS_SUCCESS) {
             ESP_LOGI(TAG_ZIGBEE, "Network creation successful");
-            post_program_state(DONE);
+            program_state_post(DONE);
 
             zigbee_print_network_info();
 
             xEventGroupSetBits(event_group, ZIGBEE_BIT);
         } else {
             ESP_LOGE(TAG_ZIGBEE, "Network creation failure (status: 0x%02x), retrying...", params.status);
-            post_program_state(ERROR);
+            program_state_post(ERROR);
 
             err = ezb_bdb_start_top_level_commissioning(EZB_BDB_MODE_NETWORK_FORMATION);
         }
@@ -165,7 +171,7 @@ bool zigbee_handler(const ezb_app_signal_t* signal) {
 
         if (params.status != EZB_BDB_STATUS_SUCCESS) {
             ESP_LOGE(TAG_ZIGBEE, "Network steering failure (status: 0x%02x), retrying...", params.status);
-            post_program_state(ERROR);
+            program_state_post(ERROR);
 
             err = ezb_bdb_start_top_level_commissioning(EZB_BDB_MODE_NETWORK_STEERING);
         }
@@ -180,17 +186,17 @@ bool zigbee_handler(const ezb_app_signal_t* signal) {
         ezb_nwk_signal_network_status_params_t params = *((ezb_nwk_signal_network_status_params_t *)ezb_app_signal_get_params(signal));
         ezb_extaddr_t extaddr;
         err = ezb_address_extended_by_short(params.network_addr, &extaddr); // inny error handling!
-        ESP_LOGE(TAG_ZIGBEE, "Device 0x%04x reported %s", params.network_addr, ezb_nwk_network_status_to_string(params.status));
+        ESP_LOGE(TAG_ZIGBEE, "Device 0x%016llX reported %s", extaddr, ezb_nwk_network_status_to_string(params.status));
         break;
     }
     case EZB_NWK_SIGNAL_PERMIT_JOIN_STATUS: { // informacja o zamknieciu lub otwarciu sieci
         ezb_nwk_signal_permit_join_status_params_t params = *((ezb_nwk_signal_permit_join_status_params_t *)ezb_app_signal_get_params(signal));
         if (params.duration > 0) {
             ESP_LOGI(TAG_ZIGBEE, "Network open for %d s", params.duration);
-            post_program_state(PROCESSING);
+            program_state_post(PROCESSING);
         } else {
             ESP_LOGI(TAG_ZIGBEE, "Network pairing closed");
-            post_program_state(IDLE);
+            program_state_post(IDLE);
         }
         break;
     }
@@ -198,11 +204,21 @@ bool zigbee_handler(const ezb_app_signal_t* signal) {
 
     case EZB_ZDO_SIGNAL_DEVICE_ANNCE: { // rejestracja urządzenia w sieci
         ezb_zdo_signal_device_annce_params_t params = *((ezb_zdo_signal_device_annce_params_t *)ezb_app_signal_get_params(signal));
-        ESP_LOGI(TAG_ZIGBEE, "Device joined the network -> short addr: 0x%04X | IEEE addr: 0x%016llX", params.short_addr, params.device_addr.u64);
-        post_program_state(DONE);
 
-        // tu docelowo: rejestracja urządzenia
+        esp_ip6_addr_t ipv6;
 
+        gateway_ipv6_from_ieee(&ipv6, &params.device_addr.u64);
+        esp_netif_add_ip6_address(wifi_netif, ipv6, false);
+
+        gateway_map_insert(params.device_addr.u64, params.short_addr);
+
+        ESP_LOGI(TAG_ZIGBEE, "========== NEW DEVICE =========");
+        ESP_LOGI(TAG_ZIGBEE, "short addr: 0x%04x", params.short_addr);
+        ESP_LOGI(TAG_ZIGBEE, "IEEE addr:  0x%016llx", params.device_addr.u64);
+        ESP_LOGI(TAG_ZIGBEE, "IPv6 addr:  " IPV6STR, IPV62STR(ipv6));
+        ESP_LOGI(TAG_ZIGBEE, "===============================");
+
+        program_state_post(DONE);
         break;
     }
     case EZB_ZDO_SIGNAL_DEVICE_UNAVAILABLE: { // urządzenie nieosiągalne
@@ -238,7 +254,7 @@ bool zigbee_handler(const ezb_app_signal_t* signal) {
 
     if (err != EZB_ERR_NONE) {
         ESP_LOGE(TAG_ZIGBEE, "Error at %s, code: 0x%02X", ezb_app_signal_to_string(signal_type), err);
-        post_program_state(ERROR);
+        program_state_post(ERROR);
     }
 
     return true;
@@ -248,17 +264,10 @@ void zigbee_cluster_handler(ezb_zcl_core_action_callback_id_t callback_id, void 
     // ...
 }
 
-esp_err_t zigbee_start_pairing(void) {
-    ezb_err_t err;
-
+void zigbee_start_pairing(void) {
     esp_zigbee_lock_acquire(portMAX_DELAY);
-    err = ezb_bdb_start_top_level_commissioning(EZB_BDB_MODE_NETWORK_STEERING);
+    ezb_bdb_start_top_level_commissioning(EZB_BDB_MODE_NETWORK_STEERING);
     esp_zigbee_lock_release();
-
-    if (err != EZB_ERR_NONE)
-        return ESP_FAIL; // start parowania nieudany
-
-    return ESP_OK;
 }
 
 void zigbee_print_network_info(void) {
@@ -275,7 +284,7 @@ void zigbee_print_network_info(void) {
 
     esp_zigbee_lock_release();
 
-    ESP_LOGI(TAG_ZIGBEE, "===== ZIGBEE NETWORK INFO =====");
+    ESP_LOGI(TAG_ZIGBEE, "======== NETWORK INFO =========");
     ESP_LOGI(TAG_ZIGBEE, "Channel:     %d", channel);
     ESP_LOGI(TAG_ZIGBEE, "PAN ID:      0x%04X", panid);
     ESP_LOGI(TAG_ZIGBEE, "Ext PAN ID:  0x%016llX", extpanid.u64);
@@ -287,11 +296,11 @@ void zigbee_print_network_info(void) {
 void zigbee_print_active_devices(void) {
     esp_zigbee_lock_acquire(portMAX_DELAY);
 
-    // ezb_nwk_nbr_iterator_t it = EZB_NWK_NBR_ITERATOR_INITIALIZER;
-    // ezb_nwk_nbr_record_t record;
-    // uint16_t count = 0;
+    ezb_nwk_info_iterator_t it = EZB_NWK_INFO_ITERATOR_INIT;
+    ezb_nwk_neighbor_info_t record;
+    uint16_t count = 0;
 
-    // ESP_LOGI(TAG_ZIGBEE, "=== CONNECTED DEVICES ===");
+    ESP_LOGI(TAG_ZIGBEE, "====== CONNECTED DEVICES ======");
     // while (ezb_nwk_nbr_iterator_next(&it, &record) == EZB_ERR_NONE) {
     //     const char *role = (record.device_type == EZB_NWK_DEVICE_TYPE_ROUTER) ? "Router" :
     //                        (record.device_type == EZB_NWK_DEVICE_TYPE_END_DEVICE) ? "EndDev" : "Other";
@@ -302,7 +311,8 @@ void zigbee_print_active_devices(void) {
 
     // if (count == 0) {
     //     ESP_LOGI(TAG_ZIGBEE, "No devices connected.");
-    // }
+
+    ESP_LOGI(TAG_ZIGBEE, "===============================");
 
     esp_zigbee_lock_release();
 }

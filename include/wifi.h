@@ -13,7 +13,6 @@
 // #define WIFI_PASS "1234abcd"
 
 extern esp_netif_t* wifi_netif;
-extern SemaphoreHandle_t netif_semaphore;
 
 void wifi_init(void);
 

@@ -1,6 +1,5 @@
 #include "config.h"
 #include "wifi.h"
-#include "zigbee.h"
 #include "tools.h"
 
 esp_netif_t* wifi_netif;
@@ -32,12 +31,12 @@ void wifi_init(void) {
 void wifi_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
     switch (event_id) {
     case WIFI_EVENT_STA_START: {
-        post_program_state(PROCESSING);
+        program_state_post(PROCESSING);
         esp_wifi_connect();
         break;
     }
     case WIFI_EVENT_STA_CONNECTED: {
-        post_program_state(DONE);
+        program_state_post(DONE);
         esp_netif_create_ip6_linklocal(wifi_netif);
 
         wifi_event_sta_connected_t sta_connected = *((wifi_event_sta_connected_t*) event_data);
@@ -45,7 +44,7 @@ void wifi_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void
         break;
     }
     case WIFI_EVENT_STA_DISCONNECTED: {
-        post_program_state(ERROR);
+        program_state_post(ERROR);
         wifi_event_sta_disconnected_t sta_disconnected = *((wifi_event_sta_disconnected_t*) event_data);
         ESP_LOGI(TAG_WIFI, "Connection with \"%s\" lost, reason: %d, retrying...", sta_disconnected.ssid, sta_disconnected.reason);
 
@@ -62,6 +61,9 @@ void ip_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* 
     switch (event_id) {
     case IP_EVENT_STA_GOT_IP: {
         xEventGroupSetBits(event_group, WIFI_BIT);
+        break;
+    }
+    case IP_EVENT_GOT_IP6: {
         break;
     }
     case IP_EVENT_TX_RX: {
@@ -84,16 +86,16 @@ void wifi_print_network_info(void) {
     esp_netif_get_ip_info(wifi_netif, &ipv4);
     int ipv6_count = esp_netif_get_all_ip6(wifi_netif, ipv6);
 
-    ESP_LOGI(TAG_WIFI, "====== WIFI NETWORK INFO ======");
+    ESP_LOGI(TAG_WIFI, "========= NETWORK INFO ========");
     if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
         ESP_LOGI(TAG_WIFI, "Channel:     %d", ap_info.primary);
         ESP_LOGI(TAG_WIFI, "SSID:        %s", ap_info.ssid);
         ESP_LOGI(TAG_WIFI, "RSSI:        %d dBm", ap_info.rssi);
-        ESP_LOGI(TAG_WIFI, "IPv4 Addr:   " IPSTR, IP2STR(&ipv4.ip));
+        ESP_LOGI(TAG_WIFI, "IPv4 addr:   " IPSTR, IP2STR(&ipv4.ip));
         ESP_LOGI(TAG_WIFI, "Netmask:     " IPSTR, IP2STR(&ipv4.netmask));
         ESP_LOGI(TAG_WIFI, "Gateway:     " IPSTR, IP2STR(&ipv4.gw));
         for (int i = 1; i < ipv6_count+1; i++)
-            ESP_LOGI(TAG_WIFI, "IPv6 Addr %d: " IPV6STR, i, IPV62STR(ipv6[i-1]));
+            ESP_LOGI(TAG_WIFI, "IPv6 addr %d: " IPV6STR, i, IPV62STR(ipv6[i-1]));
     } else
         ESP_LOGW(TAG_WIFI, "Status:      Not connected");
 
